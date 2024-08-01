@@ -60,13 +60,11 @@ def query():
             docs = loader.load_and_split(text_splitter=text_splitter)
             #response_message = docs[0].page_content
             #print(response_message)
-            print([doc.metadata for doc in docs])
+            #print([doc.metadata for doc in docs])
             first_doc_title = docs[0].metadata.get('title', 'No title available')
-            print(first_doc_title)
+            #print(first_doc_title)
             docs = filter_complex_metadata(docs)
             Chroma.from_documents(docs, embedding_function, persist_directory="chroma_db")
-            
-            
             #doc_len = len(docs)
             #print(doc_len)
             return jsonify({'message': f'Title: {first_doc_title}'}), 200
