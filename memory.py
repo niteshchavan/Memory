@@ -6,8 +6,10 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.utils import filter_complex_metadata
 
-
-
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_community.chat_models import ChatOllama
+from langchain_core.messages import HumanMessage
 
 import re
 
@@ -38,6 +40,25 @@ embedding_function = HuggingFaceEmbeddings(model_name='all-mpnet-base-v2')
 
 db = Chroma(persist_directory="chroma_db", embedding_function=embedding_function)
 
+llm = ChatOllama(model="qwen2:0.5b")
+
+SYSTEM_TEMPLATE = """
+Answer the user's questions based on the below context. 
+If the context doesn't contain any relevant information to the question, don't make something up and just say "I don't know":
+
+<context>
+{context}
+</context>
+"""
+question_answering_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            SYSTEM_TEMPLATE,
+        ),
+        MessagesPlaceholder(variable_name="messages"),
+    ]
+)
 
 
 @app.route('/')
@@ -78,16 +99,18 @@ def query():
                     },
             )
             documents = retriever.invoke(query_text) 
-            if documents:
-                context = "\n\n".join([doc.page_content for doc in documents])
-                print([doc.metadata for doc in documents])
-                return jsonify({'message': context}), 200
-            else:
-                context = "No relevant information found."
-                print("No documents retrieved.")
-                return jsonify({'message': context}), 200          
-
-        
+            document_chain = create_stuff_documents_chain(llm, question_answering_prompt)
+            result =  document_chain.invoke(
+                    {
+                        "context": documents,
+                        "messages": [
+                            HumanMessage(content=query_text)
+                        ],
+                    }
+                )
+            print(result)
+            return jsonify({'message': f'Title: {result}'}), 200
+         
 
     except Exception as e:
         print(e)
