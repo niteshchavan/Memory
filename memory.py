@@ -18,16 +18,22 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_community.chat_message_histories import SQLChatMessageHistory
+from langchain_core.runnables import RunnableParallel
 
 
 import re
 
 app = Flask(__name__)
 
+embedding_function = HuggingFaceEmbeddings(model_name='all-mpnet-base-v2')
+
+db = Chroma(persist_directory="chroma_db", embedding_function=embedding_function)
+
+llm = ChatOllama(model="qwen2:0.5b")
+
 def contains_url(text):
     url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', re.IGNORECASE)
     return url_pattern.search(text) is not None
-
 
 # Extractor function to get all text within <p> tags
 def bs4_extractor(html: str) -> str:
@@ -40,12 +46,6 @@ def bs4_extractor(html: str) -> str:
     text = re.sub(r"\n\s*\n", "\n\n", text)  # Remove multiple newlines
     text = re.sub(r"\s+", " ", text).strip()  # Remove extra spaces
     return text
-
-embedding_function = HuggingFaceEmbeddings(model_name='all-mpnet-base-v2')
-
-db = Chroma(persist_directory="chroma_db", embedding_function=embedding_function)
-
-llm = ChatOllama(model="qwen2:0.5b")
 
 def create_embedings(query_text):
         loader = RecursiveUrlLoader(query_text, extractor=bs4_extractor)
@@ -68,10 +68,83 @@ def create_embedings(query_text):
 
 
 
-def create_retriver(query_text):
-    retriever = db.as_retriever()
+store = {}
 
-    return response
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    if session_id not in store:
+        store[session_id] = ChatMessageHistory()
+    return store[session_id]
+
+
+
+contextualize_q_system_prompt = (
+    "Given a chat history and the latest user question "
+    "which might reference context in the chat history, "
+    "formulate a standalone question which can be understood "
+    "without the chat history. Do NOT answer the question, "
+    "just reformulate it if needed and otherwise return it as is."
+)
+
+contextualize_q_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ]
+)
+system_prompt = (
+    "You are an assistant for question-answering tasks. "
+    "Use the following pieces of retrieved context to answer "
+    "the question. If you don't know the answer, say that you "
+    "don't know. Use three sentences maximum and keep the "
+    "answer concise."
+    "\n\n"
+    "{context}"
+)
+
+qa_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}"),
+    ]
+)
+
+def create_retriver(query_text):
+    retriever = db.as_retriever(
+            search_type="similarity_score_threshold",
+                search_kwargs={
+                    "k": 5,
+                    "score_threshold": 0.1,
+                },
+        )
+    print(retriever)
+    history_aware_retriever = create_history_aware_retriever(
+    llm, retriever , contextualize_q_prompt )
+
+    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+    
+    
+
+    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+
+    conversational_rag_chain = RunnableWithMessageHistory(
+        rag_chain,
+        get_session_history,
+        input_messages_key="input",
+        history_messages_key="chat_history",
+        output_messages_key="answer",
+    )
+
+    result = conversational_rag_chain.invoke(
+            {"input": query_text },
+            config={
+                "configurable": {"session_id": "abc123"}
+            },  # constructs a key "abc123" in `store`.
+            )["answer"]
+
+    return result
 
 
 
