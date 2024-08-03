@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.utils import filter_complex_metadata
-
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_models import ChatOllama
@@ -36,12 +35,8 @@ def bs4_extractor(html: str) -> str:
     # Remove all script and style elements
     for script in soup(["script", "style"]):
         script.decompose()
-    
-    # Extract text from all <p> tags
-    paragraphs = soup.find_all('p')
+    paragraphs = soup.find_all('p') # Extract text from all <p> tags
     text = "\n\n".join(p.get_text() for p in paragraphs)
-    
-    # Clean the text
     text = re.sub(r"\n\s*\n", "\n\n", text)  # Remove multiple newlines
     text = re.sub(r"\s+", " ", text).strip()  # Remove extra spaces
     return text
@@ -51,79 +46,6 @@ embedding_function = HuggingFaceEmbeddings(model_name='all-mpnet-base-v2')
 db = Chroma(persist_directory="chroma_db", embedding_function=embedding_function)
 
 llm = ChatOllama(model="qwen2:0.5b")
-
-# SYSTEM_TEMPLATE = """
-# Answer the user's questions based on the below context. 
-# If the context doesn't contain any relevant information to the question, don't make something up and just say "I don't know":
-
-# <context>
-# {context}
-# </context>
-# """
-# question_answering_prompt = ChatPromptTemplate.from_messages(
-#     [
-#         (
-#             "system",
-#             SYSTEM_TEMPLATE,
-#         ),
-#         MessagesPlaceholder(variable_name="messages"),
-#     ]
-# )
-
-
-contextualize_q_system_prompt = (
-    "Given a chat history and the latest user question "
-    "which might reference context in the chat history, "
-    "formulate a standalone question which can be understood "
-    "without the chat history. Do NOT answer the question, "
-    "just reformulate it if needed and otherwise return it as is."
-)
-
-contextualize_q_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", contextualize_q_system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ]
-)
-
-system_prompt = (
-    "You are an assistant for question-answering tasks. "
-    "Use the following pieces of retrieved context to answer "
-    "the question. If you don't know the answer, say that you "
-    "don't know. Use three sentences maximum and keep the "
-    "answer concise."
-    "\n\n"
-    "{context}"
-)
-qa_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ]
-)
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "You are a bot your name is Alice you should reply in 100 words or less"),
-        MessagesPlaceholder(variable_name="history"),
-        ("human", "{context}\n\nQ: {question}\nA:"),
-    ]
-)
-
-chain = prompt | llm
-
-
-chain_with_history = RunnableWithMessageHistory(
-    chain,
-    lambda session_id: SQLChatMessageHistory(
-        session_id=session_id, connection_string="sqlite:///sqlite.db"
-    ),
-    input_messages_key="question",
-    history_messages_key="history",
-)
-
 
 def create_embedings(query_text):
         loader = RecursiveUrlLoader(query_text, extractor=bs4_extractor)
@@ -145,14 +67,11 @@ def create_embedings(query_text):
         return first_doc_title
 
 
-    
+
 def create_retriver(query_text):
     retriever = db.as_retriever()
-    documents = retriever.invoke(query_text)
-    context = "\n\n".join([doc.page_content for doc in documents])    
 
-    
-    return context
+    return response
 
 
 
