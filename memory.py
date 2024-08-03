@@ -19,9 +19,13 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_community.chat_message_histories import SQLChatMessageHistory
 from langchain_core.runnables import RunnableParallel
-
-
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.tools import DuckDuckGoSearchResults
+import langchain 
 import re
+import logging
+
+langchain.debug = True
 
 app = Flask(__name__)
 
@@ -48,6 +52,7 @@ def bs4_extractor(html: str) -> str:
     return text
 
 def create_embedings(query_text):
+        print(query_text)
         loader = RecursiveUrlLoader(query_text, extractor=bs4_extractor)
             
         text_splitter = RecursiveCharacterTextSplitter(
@@ -55,12 +60,14 @@ def create_embedings(query_text):
             )
             
         docs = loader.load_and_split(text_splitter=text_splitter)
+
             #response_message = docs[0].page_content
             #print(response_message)
             #print([doc.metadata for doc in docs])
         first_doc_title = docs[0].metadata.get('title', 'No title available')
             #print(first_doc_title)
         docs = filter_complex_metadata(docs)
+        print(first_doc_title)
         Chroma.from_documents(docs, embedding_function, persist_directory="chroma_db")
             #doc_len = len(docs)
             #print(doc_len)
@@ -101,6 +108,7 @@ system_prompt = (
     "answer concise."
     "\n\n"
     "{context}"
+    
 )
 
 qa_prompt = ChatPromptTemplate.from_messages(
@@ -119,9 +127,12 @@ def create_retriver(query_text):
                     "score_threshold": 0.1,
                 },
         )
-    print(retriever)
+    
     history_aware_retriever = create_history_aware_retriever(
     llm, retriever , contextualize_q_prompt )
+
+    
+
 
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     
@@ -137,16 +148,21 @@ def create_retriver(query_text):
         output_messages_key="answer",
     )
 
+    
+    
     result = conversational_rag_chain.invoke(
             {"input": query_text },
             config={
                 "configurable": {"session_id": "abc123"}
             },  # constructs a key "abc123" in `store`.
-            )["answer"]
+            
+            )["answer"],
+    
 
     return result
 
 
+search = DuckDuckGoSearchResults(num_results=1)
 
 
 
@@ -166,6 +182,14 @@ def query():
             return jsonify({'message': f'Title: {first_doc_title}'}), 200
         
         else:
+            result = search.invoke(query_text)
+            #first_doc_title = result["snippet"] #.metadata.get('title', 'No title available')
+            #match = re.search(r'link:\s*(https?://[^\s\]]+)', result)
+            #if match:
+            #    link_value = match.group(1)
+            #    first_doc_title = create_embedings(link_value)
+            #    result = create_retriver(query_text)
+                #print(result)
             result = create_retriver(query_text)
             return jsonify({'message': f'Title: {result}'}), 200
          
