@@ -11,35 +11,16 @@ from langchain_community.chat_models import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.chat_message_histories import SQLChatMessageHistory
-from langchain import hub
+from langchain_core.prompts import PromptTemplate
+
+
+
 
 embedding_function = HuggingFaceEmbeddings(model_name='all-mpnet-base-v2')
 db = Chroma(persist_directory="chroma_db", embedding_function=embedding_function)
 llm = ChatOllama(model="qwen2:0.5b")
 
 
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise."),
-        MessagesPlaceholder(variable_name="history"),
-        ("human", "{context}\n\nQ: {question}\nA:"),
-    ]
-)
-
-
-
-chain = prompt | llm
-
-
-chain_with_history = RunnableWithMessageHistory(
-    chain,
-    lambda session_id: SQLChatMessageHistory(
-        session_id=session_id, connection_string="sqlite:///sqlite.db"
-    ),
-    input_messages_key="question",
-    history_messages_key="history",
-)
 
 
 def contains_url(text):
@@ -100,6 +81,28 @@ def retriever(data):
     documents = retriever.invoke(data)    
     return documents
 
+from langchain import hub
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+
+prompt = hub.pull("rlm/rag-prompt")
+
+
+def chain(data, context):
+    rag_chain = (
+    {"context": retriever | context, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+    )
+    result = rag_chain.invoke(data)
+    print(result)
+    return result
+
+
+
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -128,8 +131,9 @@ def query():
                 result = create_embeddings(url)
                 retrieved_data = retriever(data)
                 context = "\n\n".join([doc.page_content for doc in retrieved_data])
-                config = {"configurable": {"session_id": "1"}}
-                response = chain_with_history.invoke({"question": data, "context": context }, config=config)
+                response = chain(data, context)
+                #config = {"configurable": {"session_id": "1"}}
+                #response = chain_with_history.invoke({"question": data, "context": context }, config=config)
                 return jsonify({'message': response.content}), 200
             else:
                 print("No data found, searching online")
@@ -139,8 +143,9 @@ def query():
                     print("Data Added: ", result)
                     retrieved_data = retriever(data)
                     context = "\n\n".join([doc.page_content for doc in retrieved_data])
-                    config = {"configurable": {"session_id": "1"}}
-                    response = chain_with_history.invoke({"question": data, "context": context }, config=config)
+                    response = chain(data, context)
+                    #config = {"configurable": {"session_id": "1"}}
+                    #response = chain_with_history.invoke({"question": data, "context": context }, config=config)
                     return jsonify({'message': response.content}), 200
                 else:
                     return jsonify({'message': 'No URL found and no data available'}), 404
