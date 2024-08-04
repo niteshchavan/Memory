@@ -122,7 +122,9 @@ def query():
             #Check if chromad db has data or else search online for data
             retrieved_data = retriever(data)
             if retrieved_data:
-                print(retrieved_data)
+                url = get_url(data)
+                result = create_embeddings(url)
+                retrieved_data = retriever(data)
                 context = "\n\n".join([doc.page_content for doc in retrieved_data])
                 config = {"configurable": {"session_id": "1"}}
                 response = chain_with_history.invoke({"question": data, "context": context }, config=config)
