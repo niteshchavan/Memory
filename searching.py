@@ -8,10 +8,37 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_community.chat_models import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import SQLChatMessageHistory
+
 
 embedding_function = HuggingFaceEmbeddings(model_name='all-mpnet-base-v2')
 db = Chroma(persist_directory="chroma_db", embedding_function=embedding_function)
 llm = ChatOllama(model="qwen2:0.5b")
+
+
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a bot your name is Alice you should reply in 100 words or less"),
+        MessagesPlaceholder(variable_name="history"),
+        ("human", "{context}\n\nQ: {question}\nA:"),
+    ]
+)
+
+chain = prompt | llm
+
+
+chain_with_history = RunnableWithMessageHistory(
+    chain,
+    lambda session_id: SQLChatMessageHistory(
+        session_id=session_id, connection_string="sqlite:///sqlite.db"
+    ),
+    input_messages_key="question",
+    history_messages_key="history",
+)
+
 
 def contains_url(text):
     url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', re.IGNORECASE)
@@ -97,7 +124,9 @@ def query():
             if retrieved_data:
                 print(retrieved_data)
                 context = "\n\n".join([doc.page_content for doc in retrieved_data])
-                return jsonify({'message': context}), 200
+                config = {"configurable": {"session_id": "1"}}
+                response = chain_with_history.invoke({"question": data, "context": context }, config=config)
+                return jsonify({'message': response.content}), 200
             else:
                 print("No data found, searching online")
                 url = get_url(data)
@@ -106,7 +135,9 @@ def query():
                     print("Data Added: ", result)
                     retrieved_data = retriever(data)
                     context = "\n\n".join([doc.page_content for doc in retrieved_data])
-                    return jsonify({'message': context}), 200
+                    config = {"configurable": {"session_id": "1"}}
+                    response = chain_with_history.invoke({"question": data, "context": context }, config=config)
+                    return jsonify({'message': response.content}), 200
                 else:
                     return jsonify({'message': 'No URL found and no data available'}), 404
 
