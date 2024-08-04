@@ -8,22 +8,16 @@ from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.chat_models import ChatOllama
-#from langchain_core.messages import HumanMessage
 from langchain.chains import create_history_aware_retriever
 from langchain_core.prompts import MessagesPlaceholder
 from langchain.chains import create_retrieval_chain
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_community.chat_message_histories import SQLChatMessageHistory
-from langchain_core.runnables import RunnableParallel
-from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.tools import DuckDuckGoSearchResults
-import langchain 
+import langchain
 import re
-import logging
+
 
 langchain.debug = True
 
@@ -61,16 +55,12 @@ def create_embedings(query_text):
             
         docs = loader.load_and_split(text_splitter=text_splitter)
 
-            #response_message = docs[0].page_content
-            #print(response_message)
-            #print([doc.metadata for doc in docs])
         first_doc_title = docs[0].metadata.get('title', 'No title available')
-            #print(first_doc_title)
+
         docs = filter_complex_metadata(docs)
         print(first_doc_title)
         Chroma.from_documents(docs, embedding_function, persist_directory="chroma_db")
-            #doc_len = len(docs)
-            #print(doc_len)
+
         return first_doc_title
 
 
@@ -82,8 +72,6 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
     if session_id not in store:
         store[session_id] = ChatMessageHistory()
     return store[session_id]
-
-
 
 contextualize_q_system_prompt = (
     "Given a chat history and the latest user question "
@@ -100,6 +88,7 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages(
         ("human", "{input}"),
     ]
 )
+
 system_prompt = (
     "You are an assistant for question-answering tasks. "
     "Use the following pieces of retrieved context to answer "
@@ -119,51 +108,82 @@ qa_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-def create_retriver(query_text):
-    retriever = db.as_retriever(
-            search_type="similarity_score_threshold",
-                search_kwargs={
-                    "k": 5,
-                    "score_threshold": 0.1,
-                },
-        )
-    
-    history_aware_retriever = create_history_aware_retriever(
-    llm, retriever , contextualize_q_prompt )
+import warnings
 
-    
+def create_retriever(query_text):
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
 
 
-    question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-    
-    
-
-    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-    conversational_rag_chain = RunnableWithMessageHistory(
-        rag_chain,
-        get_session_history,
-        input_messages_key="input",
-        history_messages_key="chat_history",
-        output_messages_key="answer",
-    )
-
-    
-    
-    result = conversational_rag_chain.invoke(
-            {"input": query_text },
-            config={
-                "configurable": {"session_id": "abc123"}
-            },  # constructs a key "abc123" in `store`.
+        try:
+            retriever = db.as_retriever(
+                    search_type="similarity_score_threshold",
+                        search_kwargs={
+                            "k": 5,
+                            "score_threshold": 0.1,
+                        },
+                )
             
-            )["answer"],
-    
+            history_aware_retriever = create_history_aware_retriever(
+            llm, retriever , contextualize_q_prompt )
 
-    return result
+            
 
 
-search = DuckDuckGoSearchResults(num_results=1)
+            question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+            
+            
 
+            rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+
+            conversational_rag_chain = RunnableWithMessageHistory(
+                rag_chain,
+                get_session_history,
+                input_messages_key="input",
+                history_messages_key="chat_history",
+                output_messages_key="answer",
+            )
+
+            
+            
+            result = conversational_rag_chain.invoke(
+                    {"input": query_text },
+                    config={
+                        "configurable": {"session_id": "abc123"}
+                    },  # constructs a key "abc123" in `store`.
+                    
+                    )["answer"],
+
+            
+                    # Check for warnings
+            for warning in w:
+                    if "No relevant docs were retrieved" in str(warning.message):
+                        print("No relevant documents were found with the given relevance score threshold.")
+                        result = search(query_text)
+                        return result
+                    
+            return result
+            
+                            
+            
+        
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return "Failed to retrieve documents."
+
+def search(query_text):
+    search = DuckDuckGoSearchResults(num_results=1)
+    result = search.invoke(query_text)
+    match = re.search(r'link:\s*(https?://[^\s\]]+)', result)
+    if match:
+        link_value = match.group(1)
+        first_doc_title = create_embedings(link_value)
+        print(first_doc_title)
+        result = create_retriever(query_text)
+        return result
+    else:
+        return "No search results found."
 
 
 @app.route('/')
@@ -179,19 +199,11 @@ def query():
         
         if contains_url(query_text):
             first_doc_title = create_embedings(query_text)
-            return jsonify({'message': f'Title: {first_doc_title}'}), 200
+            return jsonify({'message': f'AI: {first_doc_title}'}), 200
         
         else:
-            result = search.invoke(query_text)
-            #first_doc_title = result["snippet"] #.metadata.get('title', 'No title available')
-            #match = re.search(r'link:\s*(https?://[^\s\]]+)', result)
-            #if match:
-            #    link_value = match.group(1)
-            #    first_doc_title = create_embedings(link_value)
-            #    result = create_retriver(query_text)
-                #print(result)
-            result = create_retriver(query_text)
-            return jsonify({'message': f'Title: {result}'}), 200
+            result = create_retriever(query_text)
+            return jsonify({'message': f'AI: {result}'}), 200
          
 
     except Exception as e:
